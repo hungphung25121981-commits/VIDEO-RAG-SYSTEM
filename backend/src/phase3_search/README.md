@@ -1,143 +1,113 @@
-# Phase 1 — Extraction & Chunking
+# Phase 3 — Search & Generation
 
 ## 1. Mục Tiêu
 
-Phase 1 "mổ xẻ" video thô thành các mảnh dữ liệu đa phương thức: văn bản (từ giọng nói và từ chữ trong khung hình), sự kiện âm thanh môi trường, và keyframe ảnh — tất cả được gom thành các **chunk** có timestamp chính xác, sẵn sàng cho việc vector hóa ở Phase 2.
+Đây là "trái tim truy vấn" của hệ thống — nhận câu hỏi ngôn ngữ tự nhiên, tìm đúng ngữ cảnh liên quan nhất trong Qdrant + Kuzu Graph, rồi sinh câu trả lời có trích dẫn chính xác đến từng mốc thời gian.
 
-**Input:** video đã có `VID_Hash` từ Phase 0.
-**Output:** danh sách chunk (mỗi chunk gồm text, timestamp, keyframe_path, metadata), lưu tạm trong `data/temp_workspace/`.
+**Input:** `--query [text]`, dữ liệu từ Qdrant + Kuzu (Phase 2).
+**Output:** câu trả lời (nếu không dùng `-s`) + `trake` (mảng truy vết).
 
-> Nguyên tắc: SigLIP 2 **không** tham gia phase này (tránh nghẽn CPU–GPU) — model embedding ảnh chỉ chạy ở Phase 2.
-
-## 2. Sơ Đồ Luồng Xử Lý
-
-### 2.1 Audio Pipeline — Kiến trúc "Mù Domain" (Residual Subtraction)
+## 2. Sơ Đồ DAG Bất Biến (4 Trạm — Luôn Theo Đúng Thứ Tự)
 
 ```
-audio_gốc.wav
-     │
-     ▼
-┌────────────────────┐
-│  DeepFilterNet     │  → clean_speech.wav (giọng người đã cô lập)
-└─────────┬──────────┘
-          │
-          ▼
-┌──────────────────────────────────────────┐
-│ Residual: Audio_gốc − Audio_clean        │  → background_noise.wav
-│ (numpy/scipy, đã resample + normalize)   │
-└─────────┬────────────────────────────────┘
-          ▼
-┌──────────────────────┐        RMS < 1e-4          ┌──────────────────────┐
-│  RMS Gate            │ ─────────────────────────▶ │ Bỏ qua CLAP          
-│  (kiểm tra độ ồn)    │        (gần như câm)       │ (tránh musical noise)│
-└─────────┬────────────┘                            └──────────────────────┘
-          │ RMS ≥ 1e-4
-          ▼
-┌──────────────────────────────────────────┐
-│ Tiered Caching (tuần tự, không xen kẽ):  │
-│  Load Whisper → quét clean_speech.wav    │
-│  → Text + Timestamp → empty_cache()      │
-│  Load CLAP → quét background_noise.wav   │
-│  → Nhãn sự kiện (gió, xe, động vật...)   │
-│  → empty_cache()                         │
-└──────────────────────────────────────────┘
+                        Câu hỏi người dùng
+                                │
+                                ▼
+                 ┌─────────────────────────┐
+                 │  Micro-Router (DeBERTa) │
+                 │  CPU — phân loại modal  │
+                 └───────────┬─────────────┘
+                             │
+              confidence < 0.4 cho mọi cờ?
+                   │                  │
+                  Có                 Không
+                   │                  │
+                   ▼                  ▼
+         Bật CẢ 3 cờ            Chỉ bật cờ được chọn
+         (Fallback an toàn)
+                    │                  │
+                    └────────┬─────────┘
+                             ▼
+         TRẠM 1 — Quét diện rộng (tối đa 3 Collection: Semantic, Visual, Sparse)
+                             │
+                             ▼
+         TRẠM 2 — Nhảy cóc qua Kuzu Graph (Cypher, hop_limit clamp [1,5])
+                             │
+                             ▼
+         TRẠM 3 — Xếp hạng toàn cục (RRF, dùng α, β đã tune theo domain)
+                             │
+                             ▼
+         TRẠM 4 — Cắt gọt (0/1 Knapsack DP, capacity = --max_context_images)
+                             │
+                             ▼
+                  Qwen 2.5 VL (ghim GPU)
+                  → Chain-of-Thought → Câu trả lời + trake
 ```
 
-### 2.2 Vision / OCR — Ngưỡng Động (γ)
-
-```
-keyframe.jpg
-     │
-     ▼
-YOLOv8 (ONNX) → lọc metadata thị giác
-     │
-     ▼
-cv2.Laplacian(frame, CV_64F).var() → đo độ mờ
-     │
-     ▼
-Tra config/settings.yaml[domain].gamma_matrix
-     │  (so với variance_boundary → chọn low_variance hoặc high_variance làm γ)
-     ▼
-RapidOCR (ngưỡng γ)
-     │
-     ├── confidence ≥ γ → nhận kết quả
-     │
-     └── confidence < γ → OpenCV (CLAHE, Denoise, Lanczos4)
-                           → EasyOCR (tối đa 3 lần retry)
-```
-
-### 2.3 Hybrid Adaptive Chunking
-
-```
-Whisper timestamps  +  PySceneDetect scene markers
-              │
-              ▼
-   Câu nói vắt ngang 2 cảnh?
-        │              │
-      Không            Có
-        │              │
-        ▼              ▼
-  1 chunk,        2 sub-chunk (2 keyframe .jpg riêng)
-  1 keyframe       chung parent_chunk_id
-                   (KHÔNG dùng Mean Pooling)
-```
+> **Nguyên tắc bất biến:** dù Router mở bao nhiêu cờ ở Trạm 1, hay Graph Hop mở rộng bao nhiêu candidate ở Trạm 2, số ảnh cuối cùng đưa vào VLM **không bao giờ vượt quá** `--max_context_images` — đảm bảo VRAM ổn định tuyệt đối.
 
 ## 3. Công Nghệ & Thuật Toán Áp Dụng
 
 | Thành phần | Công nghệ | Ghi chú kỹ thuật |
 |---|---|---|
-| Tách giọng nói | DeepFilterNet | Xuất `clean_speech.wav` |
-| Tách nhiễu môi trường | Residual Subtraction (numpy/scipy) | `Audio_gốc − Audio_clean`; phải resample + normalize (float32, [-1,1]) trước khi trừ để tránh lệch pha |
-| Chống musical noise | RMS Gate (ε = 1e-4) | Ngăn CLAP nhận input gần-như-câm bị nhiễu artifact từ STFT |
-| Speech-to-Text | Fast Whisper | Xuất text + timestamp chính xác |
-| Phân loại âm thanh | CLAP | Nhãn hóa `background_noise.wav` |
-| Metadata thị giác | YOLOv8 (ONNX) | Chạy nhẹ, không cần GPU nặng |
-| OCR chính | RapidOCR | Ngưỡng tin cậy động γ (không hard-code 85%) |
-| OCR dự phòng | EasyOCR | Chỉ kích hoạt khi RapidOCR dưới ngưỡng γ, tối đa 3 lần retry |
-| Tiền xử lý ảnh | OpenCV (CLAHE, Denoising, Lanczos4) | Tăng chất lượng ảnh trước khi OCR lại |
-| Đo độ mờ | `cv2.Laplacian().var()` | Độc lập với OCR — chạy trực tiếp trên ma trận điểm ảnh |
-| Phát hiện cảnh | PySceneDetect | Xác định mốc chuyển cảnh cho Hybrid Chunking |
+| Routing | DeBERTa (CPU) | Multi-label Fallback: nếu độ tin cậy < 0.4 cho mọi cờ → mở toàn bộ 3 modal |
+| Graph traversal | Kuzu Cypher, Parameterized Query | Chống Cypher Injection; `safe_hop = max(1, min(int(hop_limit), 5))` |
+| Ranking | Tri-Search RRF | `S_total = α·S_semantic + β·S_visual + (1−α−β)·S_keyword` — 2 bậc tự do, grid search trên mặt phẳng (α, β) |
+| Cut-off | 0/1 Knapsack (Dynamic Programming) | Weight = 1 (chunk đơn) hoặc 2 (chunk cặp vắt cảnh); Value = điểm RRF (cặp lấy Value từ sub-chunk match độc lập) |
+| Rerank tùy chọn | Cross-Encoder (`-rr`) | Chạy CPU, chấm lại Top-K trước khi vào RRF |
+| Generation | Qwen 2.5 VL (3B INT4) | Ghim cố định GPU trong suốt Phase 3, nhận `{type: image}` qua PIL.Image |
 
-## 4. Ngưỡng OCR Động (γ) — Cách Hoạt Động
+## 4. Công Thức Ranking Chi Tiết
 
-γ được calibrate **một lần** ở đầu Phase 1 cho mỗi domain (không nằm trong vòng lặp `--tune_weights` của Phase 3 vì đổi γ kéo theo re-extract toàn corpus, chi phí rất cao). Cấu hình lưu trong `config/settings.yaml`:
-
-```yaml
-domains:
-  football_analytics:
-    gamma_matrix:
-      variance_boundary: 100   # Laplacian var < 100 → "low", >= 100 → "high"
-      low_variance: 70          # % ngưỡng OCR cho frame mờ (VD: cảnh di chuyển nhanh)
-      high_variance: 85         # % ngưỡng OCR cho frame nét (VD: slide, bảng điểm)
+```
+S_total = α · S_semantic + β · S_visual + (1 − α − β) · S_keyword
 ```
 
-## 5. Cách Chạy Độc Lập
+`α, β` được tune và lưu theo domain (xem `--tune_weights` trong `backend/README.md`), đọc từ `config/settings.yaml`.
+
+## 5. Thuật Toán Cut-off (0/1 Knapsack)
+
+- **Capacity `W`** = `--max_context_images` (mặc định 4).
+- **Item = Logical Chunk:**
+  - Chunk đơn: `Weight = 1`, `Value = điểm RRF`.
+  - Chunk cặp (vắt cảnh, có `parent_chunk_id`): `Weight = 2`, `Value = điểm RRF của sub-chunk được match độc lập`.
+- DP đảm bảo dùng tối đa ngân sách `W`, tối ưu tổng Value — không bỏ sót slot như thuật toán greedy đơn thuần.
+
+## 6. Cách Chạy Độc Lập
 
 ```bash
-# Chỉ chạy trích xuất, lưu kết quả vào temp_workspace
-python cli_pipeline.py --run_phase 1 --input_dir ./data/raw_videos --batch_size 2
+# Tìm kiếm dùng cả Graph và VLM
+python cli_pipeline.py --run_phase 3 \
+  --query "Nhân vật chính nói gì ở phút thứ 5?" \
+  --use_graph --hop_limit 2
+
+# Chỉ trích xuất bối cảnh (Context) dạng truy vết, không chạy VLM sinh văn bản
+python cli_pipeline.py --run_phase 3 \
+  --query "Find the explosion scene" -s -tr
+
+# Truy vấn với rerank Cross-Encoder + giới hạn 4 ảnh vào VLM
+python cli_pipeline.py --run_phase 3 \
+  --query "Phân tích chiến thuật bù giờ" \
+  --use_graph --hop_limit 2 -rr --max_context_images 4
 ```
 
-**Output mẫu (JSON):**
+**Output mẫu (JSON, `-s -tr`):**
 ```json
 {
   "status": "success",
-  "video_hash": "a1b2c3d4e5f6...",
-  "chunks_created": 214,
-  "audio": {
-    "speech_segments": 187,
-    "environment_events": 34,
-    "rms_gate_skipped": 9
-  },
-  "vision": {
-    "ocr_primary_pass": 178,
-    "ocr_fallback_easyocr": 22,
-    "ocr_failed_after_retry": 3
-  }
+  "answer": null,
+  "trake": [
+    {"chunk_id": "c_0301", "timestamp": "00:04:58", "keyframe_path": "data/temp_workspace/kf_0301.jpg", "rrf_score": 0.812},
+    {"chunk_id": "c_0302", "timestamp": "00:05:02", "keyframe_path": "data/temp_workspace/kf_0302.jpg", "rrf_score": 0.799}
+  ]
 }
 ```
 
-## 6. Lưu Ý Vận Hành
+## 7. Lưu Ý Vận Hành
+
+- Nếu kết quả tìm kiếm quá thưa (ít candidate), kiểm tra `α, β` đã được tune cho đúng domain hiện tại chưa (`--save_domain`).
+- Nếu Router thường xuyên rơi vào Fallback (mở cả 3 cờ), có thể cần fine-tune lại DeBERTa hoặc kiểm tra câu hỏi đầu vào có quá mơ hồ so với domain.
+- `--hop_limit` cao (gần 5) làm tăng số candidate ở Trạm 2 nhưng **không** ảnh hưởng đến VRAM cuối cùng nhờ Trạm 4 (Knapsack) luôn cắt về đúng `--max_context_images`.
 
 - Nếu `ocr_fallback_easyocr` chiếm tỷ lệ lớn bất thường, kiểm tra lại `variance_boundary` trong `gamma_matrix` — có thể domain hiện tại cần ngưỡng khác với mặc định.
 - Nếu `rms_gate_skipped` gần bằng tổng số chunk (video gần như không có tiếng ồn môi trường), đây là hành vi bình thường — không phải lỗi.
