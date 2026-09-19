@@ -18,7 +18,7 @@
                  │  CPU — phân loại modal  │
                  └───────────┬─────────────┘
                              │
-              confidence < 0.4 cho mọi cờ?
+                 confidence < 0.4 cho mọi cờ?
                    │                  │
                   Có                 Không
                    │                  │
