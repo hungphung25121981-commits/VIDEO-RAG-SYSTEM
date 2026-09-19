@@ -1,4 +1,4 @@
-# Backend VIDEO-RAG System (Kiến trúc V8.0 Final Consolidated)
+# Backend VIDEO-RAG System (Kiến trúc V8.0)
 
 ## 1. Tổng Quan
 
