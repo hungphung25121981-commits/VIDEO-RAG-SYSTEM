@@ -1,7 +1,3 @@
-# README 4 — APP (Backend Engine)
-
- **App backend**
-
 ---
 
 ## 1. APP — Backend Engine (FastAPI + Docker Compose)
