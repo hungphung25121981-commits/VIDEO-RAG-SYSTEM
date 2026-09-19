@@ -1,4 +1,3 @@
----
 
 ## 1. APP — Backend Engine (FastAPI + Docker Compose)
 
