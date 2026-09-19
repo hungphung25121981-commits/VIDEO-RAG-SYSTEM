@@ -1,6 +1,6 @@
 # HUB KIẾN THỨC —VIDEO-RAG System
 
-> Hệ thống RAG (Retrieval-Augmented Generation) đa phương thức cho video, xử lý hoàn toàn cục bộ (local-first), domain-agnostic, tối ưu để chạy trên phần cứng phổ thông (16GB VRAM).
+> Hệ thống RAG (Retrieval-Augmented Generation) đa phương thức cho video, xử lý hoàn toàn cục bộ (local-first), domain-agnostic, tối ưu để chạy trên phần cứng phổ thông 16GB VRAM.
 
 ---
 
@@ -91,7 +91,6 @@ project-root/
 | [`backend/src/phase2_build/README.md`](./backend/src/phase2_build/README.md) | Embedding, Qdrant, Kuzu Graph |
 | [`backend/src/phase3_search/README.md`](./backend/src/phase3_search/README.md) | Router, RRF, Graph Hop, Knapsack, VLM |
 | [`backend/src/phase4_eval/README.md`](./backend/src/phase4_eval/README.md) | Cascade Evaluation 2 tầng |
-| [`data/README.md`](./data/README.md) | Giải thích từng thư mục con trong `data/`, quy tắc dọn dẹp |
 | [`app/README.md`](./app/README.md) | Docker WebUI tạm thời + Lộ trình frontend chính thức |
 
 ---
