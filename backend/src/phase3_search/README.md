@@ -23,8 +23,8 @@
                   Có                 Không
                    │                  │
                    ▼                  ▼
-         Bật CẢ 3 cờ            Chỉ bật cờ được chọn
-         (Fallback an toàn)
+           Bật CẢ 3 cờ              Chỉ bật cờ 
+          (Fallback an toàn)        được chọn 
                     │                  │
                     └────────┬─────────┘
                              ▼
