@@ -1,6 +1,6 @@
 ##  PHASE 4 — Đánh Giá Chất Lượng (Eval Cascade 2 Tầng, 100% Local)
 
-### 1 Ý tưởng cốt lõi
+### 1. Ý tưởng cốt lõi
 
 Thay vì chấm điểm chất lượng câu trả lời ngay khi người dùng hỏi (tốn thời gian, tốn VRAM), hệ thống tách làm **2 nhịp**:
 
@@ -9,7 +9,7 @@ Thay vì chấm điểm chất lượng câu trả lời ngay khi người dùng
 
 Ưu điểm: không làm chậm trải nghiệm chat, và tận dụng được việc gom nhiều câu hỏi lại để chấm cùng lúc, tiết kiệm chi phí tải model.
 
-### 2 Tầng 1 — Fast Pre-Filter (chạy trên CPU, không tốn VRAM)
+### 2. Tầng 1 — Fast Pre-Filter (chạy trên CPU, không tốn VRAM)
 
 Dùng 2 model nhỏ, chuyên biệt hoá, **khác nhiệm vụ nhau**:
 
@@ -31,7 +31,7 @@ Dùng 2 model nhỏ, chuyên biệt hoá, **khác nhiệm vụ nhau**:
 
 Nhờ vậy, phần lớn câu trả lời (rõ đúng hoặc rõ sai) được xử lý xong ngay ở Tầng 1, rẻ và nhanh.
 
-### 3 Tầng 2 — Deep Judge bằng Prometheus-2 (chỉ chấm case biên)
+### 3. Tầng 2 — Deep Judge bằng Prometheus-2 (chỉ chấm case biên)
 
 Chỉ áp dụng cho các câu hỏi rơi vào vùng "nghi ngờ" (`eval_queue_deep.jsonl`) — thường chỉ là một phần nhỏ trong tổng số.
 
@@ -45,7 +45,7 @@ Chỉ áp dụng cho các câu hỏi rơi vào vùng "nghi ngờ" (`eval_queue_d
 
 Kỹ thuật này gọi là **VRAM Swapping**: máy chỉ có 1 GPU 16GB nên không thể giữ cả Qwen2.5-VL (dùng để trả lời) và Prometheus-2 (dùng để chấm điểm) cùng lúc — phải tráo đổi model ra/vào VRAM theo từng giai đoạn.
 
-### 4 Đối chiếu Ground Truth (tuỳ chọn)
+### 4. Đối chiếu Ground Truth (tuỳ chọn)
 
 Nếu có file "đáp án chuẩn" (`ground_truth.json`) dạng:
 
@@ -60,7 +60,7 @@ hệ thống sẽ tự tính:
 - **Mean Reciprocal Rank (MRR)**: khung hình đúng đứng ở hạng bao nhiêu trong kết quả
 - **Answer Overlap Ratio**: độ trùng từ vựng giữa câu trả lời sinh ra và đáp án mẫu
 
-### 5 Cách chạy Phase 4
+### 5. Cách chạy Phase 4
 
 ```bash
 # Chấm cơ bản, chỉ Tầng 1, lấy toàn bộ log đã tích luỹ ở Phase 3
@@ -101,7 +101,7 @@ python cli_pipeline.py --run_phase 4 \
 }
 ```
 
-### 6 Tính năng liên quan: Tự động tối ưu trọng số (`--tune_weights`)
+### 6. Tính năng liên quan: Tự động tối ưu trọng số (`--tune_weights`)
 
 Cùng nằm trong module `phase4_eval` (file `hyper_tuner.py`), tính năng này giúp tìm bộ trọng số **alpha (semantic) / beta (visual)** tối ưu cho tri-search ở Phase 3, bằng **Grid Search 2 chiều** tối đa hoá **Mean Reciprocal Rank**.
 
